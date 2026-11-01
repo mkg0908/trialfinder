@@ -78,10 +78,9 @@ def fmt_age(s: str) -> str:
 
 def distance_label(d) -> str:
     if d is None:   return "International"
-    if d < 100:     return f"~{int(d)} mi 🟢"
-    if d < 400:     return f"~{int(d)} mi 🟡"
-    if d < 1000:    return f"~{int(d)} mi 🟠"
-    return                  f"~{int(d)} mi 🔴"
+    if d < 400:     return f"{d:.1f} mi 🟢"
+    if d < 1000:    return f"{d:.1f} mi 🟡"
+    return                  f"{d:.1f} mi 🔴"
 
 def build_response(trials: list, profile: dict) -> str:
     if not trials:
