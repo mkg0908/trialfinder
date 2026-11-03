@@ -8,28 +8,36 @@ class ProfileRequest(Model):
 # ── Profile Agent → Orchestrator ──────────────────────────────────────────────
 class ProfileResponse(Model):
     session_id: str
-    condition: str
-    age: str
-    location: str
-    medications: str
+    condition:        str
+    age:              str
+    location:         str
+    medications:      str
+    comorbidities:    str   # other conditions, e.g. "hypertension, obesity"
+    stage:            str   # disease stage or severity, e.g. "Stage 3", "HbA1c 9.2"
+    prior_treatments: str   # past treatments, e.g. "metformin, insulin"
+    gender:           str   # "male" | "female" | ""
 
 # ── Orchestrator → Discovery Agent ────────────────────────────────────────────
 class DiscoveryRequest(Model):
-    session_id: str
-    condition: str
-    age: str
-    location: str
+    session_id:       str
+    condition:        str
+    age:              str
+    location:         str
+    comorbidities:    str
+    stage:            str
+    prior_treatments: str
+    gender:           str
 
 # ── Discovery Agent → Orchestrator ────────────────────────────────────────────
 class DiscoveryResponse(Model):
-    session_id: str
+    session_id:  str
     trials_json: str   # JSON-encoded list of trial dicts
     total_found: int
 
 # ── Orchestrator → Inquiry Agent ──────────────────────────────────────────────
 class InquiryRequest(Model):
-    session_id: str
-    trial_json: str    # JSON of one trial dict
+    session_id:  str
+    trial_json:  str   # JSON of one trial dict
     profile_json: str  # JSON of patient profile dict
 
 # ── Inquiry Agent → Orchestrator ──────────────────────────────────────────────

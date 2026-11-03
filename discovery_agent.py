@@ -179,7 +179,7 @@ def parse_study(s, user_coords):
         "url": f"https://clinicaltrials.gov/study/{id_mod.get('nctId','')}",
     }
 
-def search_all(condition, user_age, user_coords):
+def search_all(condition, user_age, user_coords, gender="", comorbidities="", stage="", prior_treatments=""):
     terms = get_terms(condition)
     seen, results = set(), []
     phases = []
@@ -191,10 +191,28 @@ def search_all(condition, user_age, user_coords):
         ]
     phases.append((None, "nationwide"))
 
+    # Build extra search terms from medical history
+    extra_terms = []
+    if stage:            extra_terms.append(stage)
+    if prior_treatments: extra_terms.extend([t.strip() for t in prior_treatments.split(",") if t.strip()][:2])
+    if comorbidities:    extra_terms.extend([t.strip() for t in comorbidities.split(",") if t.strip()][:1])
+
+    # Gender filter param for ClinicalTrials.gov API
+    sex_filter = None
+    if gender == "female": sex_filter = "FEMALE"
+    elif gender == "male": sex_filter = "MALE"
+
     for geo_filter, _ in phases:
         for term in terms[:2]:
-            params = {"query.cond":term,"filter.overallStatus":"RECRUITING","pageSize":50,"format":"json"}
-            if geo_filter: params["filter.geo"] = geo_filter
+            params = {
+                "query.cond":          term,
+                "filter.overallStatus": "RECRUITING",
+                "pageSize":            50,
+                "format":              "json",
+            }
+            if geo_filter:   params["filter.geo"] = geo_filter
+            if sex_filter:   params["filter.sex"] = sex_filter
+            if extra_terms:  params["query.term"]  = " ".join(extra_terms[:3])
             try:
                 r = httpx.get(CTGOV, params=params, timeout=20)
                 r.raise_for_status()
@@ -215,11 +233,17 @@ def search_all(condition, user_age, user_coords):
 # ── Handler ───────────────────────────────────────────────────────────────────
 @protocol.on_message(DiscoveryRequest)
 async def handle_discovery_request(ctx: Context, sender: str, msg: DiscoveryRequest):
-    ctx.logger.info(f"Discovery request: {msg.condition} | age={msg.age} | loc={msg.location}")
+    ctx.logger.info(f"Discovery request: {msg.condition} | age={msg.age} | loc={msg.location} | gender={msg.gender}")
     try:
         user_age    = int(msg.age) if msg.age.isdigit() else None
         user_coords = geocode(msg.location)
-        trials      = search_all(msg.condition, user_age, user_coords)
+        trials      = search_all(
+            msg.condition, user_age, user_coords,
+            gender=msg.gender,
+            comorbidities=msg.comorbidities,
+            stage=msg.stage,
+            prior_treatments=msg.prior_treatments,
+        )
         trials_json = json.dumps(trials)
     except Exception:
         ctx.logger.exception("Discovery search failed")
