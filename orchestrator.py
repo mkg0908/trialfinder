@@ -15,6 +15,7 @@ from uagents_core.contrib.protocols.chat import (
 from models import (
     ProfileRequest, ProfileResponse,
     DiscoveryRequest, DiscoveryResponse,
+    EligibilityRequest, EligibilityResponse,
     InquiryRequest, InquiryResponse,
 )
 import config
@@ -398,6 +399,38 @@ async def handle_user_message(ctx: Context, sender: str, msg: ChatMessage):
                 await send_to_user(ctx, sender, f"Filter applied: {fsum}\n\n" + reply)
         return
 
+    # ── On-demand eligibility check? ─────────────────────────────────────────
+    if any(p in text_lower for p in ("eligible","eligib","qualify","do i qualify")) and session["last_trials"]:
+        nums = re.findall(r"\b([1-9]\d?)\b", text)
+        if nums:
+            idx   = int(nums[0]) - 1
+            trial = session["last_trials"][idx] if 0 <= idx < len(session["last_trials"]) else None
+        else:
+            trial = None
+
+        if trial and config.ELIGIBILITY_AGENT_ADDRESS:
+            await send_to_user(ctx, sender, f"🔎 Checking your eligibility for trial #{idx+1}...")
+            await ctx.send(config.ELIGIBILITY_AGENT_ADDRESS, EligibilityRequest(
+                session_id=sender,
+                trials_json=json.dumps([{
+                    "nct_id": trial["nct_id"],
+                    "title":  trial["title"],
+                    "eligibility_criteria": trial.get("eligibility_criteria",""),
+                }]),
+                profile_json=json.dumps(session["profile"]),
+            ))
+            return
+        elif session.get("eligibility_scores"):
+            # Show already-cached scores
+            scores = session["eligibility_scores"]
+            if scores:
+                lines = ["🎯 Eligibility scores from your last search:\n"]
+                for nct_id, r in scores.items():
+                    t_idx = next((i+1 for i, t in enumerate(session["last_trials"]) if t["nct_id"]==nct_id), "?")
+                    lines.append(f"{score_emoji(r.get('score',50))} Trial #{t_idx} — {r.get('score',50)}% — {r.get('verdict','')}")
+                await send_to_user(ctx, sender, "\n".join(lines))
+                return
+
     # ── Email request? ────────────────────────────────────────────────────────
     trial = detect_email_request(text, session["last_trials"])
     if trial:
@@ -544,15 +577,77 @@ async def handle_profile_response(ctx: Context, sender: str, msg: ProfileRespons
 async def handle_discovery_response(ctx: Context, sender: str, msg: DiscoveryResponse):
     session = get_session(msg.session_id)
     trials  = json.loads(msg.trials_json)
-    session["last_trials"]   = trials
-    session["_shown_count"]  = 20
-    session["filters"]       = {}
-    session["state"]         = "idle"
+    session["last_trials"]        = trials
+    session["_shown_count"]       = 20
+    session["filters"]            = {}
+    session["eligibility_scores"] = {}
+    session["state"]              = "idle"
     _save_sessions()
 
     ctx.logger.info(f"Discovery complete: {msg.total_found} trials")
     reply = build_response(trials, session["profile"])
     await send_to_user(ctx, msg.session_id, reply)
+
+    # ── Kick off eligibility screening for top 5 trials ───────────────────────
+    if trials and config.ELIGIBILITY_AGENT_ADDRESS:
+        top5 = [
+            {"nct_id": t["nct_id"], "title": t["title"],
+             "eligibility_criteria": t.get("eligibility_criteria","")}
+            for t in trials[:5]
+        ]
+        await send_to_user(ctx, msg.session_id,
+            "🔎 Screening your eligibility for the top 5 trials...")
+        await ctx.send(config.ELIGIBILITY_AGENT_ADDRESS, EligibilityRequest(
+            session_id=msg.session_id,
+            trials_json=json.dumps(top5),
+            profile_json=json.dumps(session["profile"]),
+        ))
+
+def score_emoji(score: int) -> str:
+    if score >= 80: return "🟢"
+    if score >= 50: return "🟡"
+    return "🔴"
+
+@internal_protocol.on_message(EligibilityResponse)
+async def handle_eligibility_response(ctx: Context, sender: str, msg: EligibilityResponse):
+    session = get_session(msg.session_id)
+    try:
+        scores = json.loads(msg.scores_json)
+    except Exception:
+        scores = {}
+
+    if not scores:
+        return
+
+    session["eligibility_scores"] = scores
+
+    # ── Build eligibility report ───────────────────────────────────────────────
+    trials = session["last_trials"]
+    nct_to_idx = {t["nct_id"]: i+1 for i, t in enumerate(trials)}
+
+    lines = ["🎯 Eligibility Screening Results (Top 5 Trials):\n"]
+    for nct_id, result in scores.items():
+        idx     = nct_to_idx.get(nct_id, "?")
+        score   = result.get("score", 50)
+        verdict = result.get("verdict", "")
+        met     = result.get("met", [])
+        failed  = result.get("failed", [])
+        unknown = result.get("unknown", [])
+        emoji   = score_emoji(score)
+
+        lines.append(f"{emoji} Trial #{idx} — {score}% match")
+        lines.append(f"   {verdict}")
+        if met:
+            lines.append("   ✅ " + " · ".join(met))
+        if failed:
+            lines.append("   ❌ " + " · ".join(failed))
+        if unknown:
+            lines.append("   ❓ " + " · ".join(unknown))
+        lines.append("")
+
+    lines.append("💡 Say \"eligible for trial 3\" to screen any other trial.")
+    lines.append("⚠️  Always confirm eligibility with your doctor.")
+    await send_to_user(ctx, msg.session_id, "\n".join(lines))
 
 @internal_protocol.on_message(InquiryResponse)
 async def handle_inquiry_response(ctx: Context, sender: str, msg: InquiryResponse):

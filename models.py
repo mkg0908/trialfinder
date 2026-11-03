@@ -34,6 +34,17 @@ class DiscoveryResponse(Model):
     trials_json: str   # JSON-encoded list of trial dicts
     total_found: int
 
+# ── Orchestrator → Eligibility Agent ─────────────────────────────────────────
+class EligibilityRequest(Model):
+    session_id:  str
+    trials_json: str   # JSON list of {nct_id, title, eligibility_criteria}
+    profile_json: str  # patient profile dict as JSON
+
+# ── Eligibility Agent → Orchestrator ─────────────────────────────────────────
+class EligibilityResponse(Model):
+    session_id:  str
+    scores_json: str   # JSON: {nct_id: {score, verdict, met, failed, unknown}}
+
 # ── Orchestrator → Inquiry Agent ──────────────────────────────────────────────
 class InquiryRequest(Model):
     session_id:  str

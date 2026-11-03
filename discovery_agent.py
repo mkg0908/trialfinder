@@ -167,6 +167,7 @@ def parse_study(s, user_coords):
         "nct_id": id_mod.get("nctId",""),
         "title": id_mod.get("briefTitle",""),
         "summary": desc.get("briefSummary","")[:200].strip(),
+        "eligibility_criteria": elig.get("eligibilityCriteria","")[:1200].strip(),
         "min_age": elig.get("minimumAge","N/A"),
         "max_age": elig.get("maximumAge","N/A"),
         "location": loc_str or ("International" if not has_us else "Sites not listed"),
