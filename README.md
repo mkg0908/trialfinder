@@ -7,6 +7,7 @@
 
 🔗 **Try it live:** [@trialfinder on ASI:One](https://asi1.ai)
 📦 **Built for:** Fetch.ai Stranger Builds Hackathon 2026
+🏆 **Winner:** Overall Best Project — Fetch.ai SF In-Person Event
 
 ---
 
@@ -28,53 +29,57 @@ The website is built for researchers — not patients. A 57-year-old in Dallas w
 Talk to **@trialfinder** on ASI:One in plain English:
 
 ```
-"I have Type 2 Diabetes, I'm 57, and I live in Dallas TX"
+"I have Type 2 Diabetes, I'm 57, female, Dallas TX — already tried metformin"
 ```
 
 TrialFinder will:
-1. **Understand your profile** — condition, age, location, medications
-2. **Search ClinicalTrials.gov live** — real data, no hallucinations
-3. **Filter by age eligibility** — only trials you qualify for
-4. **Sort by distance** — nearest trials first
-5. **Show contact info** — coordinator name and email
-6. **Draft your inquiry email** — personalised, professional, one click sends via Gmail
+1. **Understand your full profile** — condition, age, location, medications, comorbidities, disease stage, prior treatments, gender
+2. **Clarify if vague** — asks once if condition is broad (e.g. "cancer" → "what type?")
+3. **Search ClinicalTrials.gov live** — real data, no hallucinations
+4. **Filter by age + sex** — only trials you qualify for
+5. **Sort by distance** — nearest trials first
+6. **Screen your eligibility** — AI reads each trial's eligibility criteria and scores your match (0–100%)
+7. **Show contact info** — coordinator name and email
+8. **Draft your inquiry email** — personalised, professional, one click sends via Gmail
 
 ---
 
 ## Architecture
 
-TrialFinder is built on **Fetch.ai uAgents** — 4 specialised agents working together:
+TrialFinder is built on **Fetch.ai uAgents** — 5 specialised agents working together:
 
 ```
 You (ASI:One)
      │
      ▼
-┌─────────────────────────────┐
-│   MedBridge (Orchestrator)  │  ← The only agent you talk to
-│   @trialfinder on ASI:One   │
-└──────────┬──────────────────┘
+┌──────────────────────────────┐
+│   MedBridge (Orchestrator)   │  ← The only agent you talk to
+│   @trialfinder on ASI:One    │
+└──────────┬───────────────────┘
            │
-    ┌──────┼──────────────────┐
-    ▼      ▼                  ▼
-┌────────┐ ┌───────────┐ ┌──────────┐
-│Profile │ │ Discovery │ │ Inquiry  │
-│ Agent  │ │   Agent   │ │  Agent   │
-└────────┘ └───────────┘ └──────────┘
-    │            │              │
-    ▼            ▼              ▼
- ASI-1 LLM  ClinicalTrials  ASI-1 LLM
- (extracts   .gov API v2    (drafts email)
-  profile)   (live data)
+    ┌──────┼────────────────────────┐
+    ▼      ▼           ▼            ▼
+┌────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────┐
+│Profile │ │Discovery│ │ Inquiry │ │ Eligibility │
+│ Agent  │ │  Agent  │ │  Agent  │ │   Screener  │
+└────────┘ └─────────┘ └─────────┘ └─────────────┘
+    │           │            │              │
+    ▼           ▼            ▼              ▼
+ ASI-1 LLM  ClinTrials  ASI-1 LLM     ASI-1 LLM
+ (extracts   .gov API   (drafts       (scores patient
+  profile)   v2 live     email)        eligibility
+                data)                  0–100%)
 ```
 
 ### Agent Breakdown
 
 | Agent | Port | Role |
 |-------|------|------|
-| **MedBridge** (Orchestrator) | 8001 | User-facing. Routes all requests. Formats responses. |
-| **Profile Agent** | 8002 | Uses ASI-1 LLM to extract condition, age, location, medications from natural language |
-| **Discovery Agent** | 8003 | Searches ClinicalTrials.gov API, filters by age, geocodes location, sorts by distance |
-| **Inquiry Agent** | 8004 | Uses ASI-1 LLM to draft a personalised inquiry email to trial coordinator |
+| **MedBridge** (Orchestrator) | 8001 | User-facing. Routes all requests. Manages session and conversation flow. |
+| **Profile Agent** | 8002 | Uses ASI-1 LLM to extract condition, age, location, medications, comorbidities, stage, prior treatments, gender |
+| **Discovery Agent** | 8003 | Searches ClinicalTrials.gov API v2, filters by age + sex, geocodes location, sorts by distance |
+| **Inquiry Agent** | 8004 | Uses ASI-1 LLM to draft a personalised inquiry email to the trial coordinator |
+| **Eligibility Screener** | 8005 | Uses ASI-1 LLM to read each trial's eligibility criteria and score the patient's match (0–100%) |
 
 ---
 
@@ -102,38 +107,47 @@ You (ASI:One)
 pip install uagents uagents-core openai httpx pydantic
 ```
 
-### Step 1 — Start the 3 sub-agents (in separate terminals)
+### Step 1 — Start the 4 sub-agents (each in a separate terminal)
 
 ```bash
 # Terminal 1
-python profile_agent.py
+python3 profile_agent.py
 # Copy the printed address → paste into config.py as PROFILE_AGENT_ADDRESS
 
 # Terminal 2
-python discovery_agent.py
+python3 discovery_agent.py
 # Copy the printed address → paste into config.py as DISCOVERY_AGENT_ADDRESS
 
 # Terminal 3
-python inquiry_agent.py
+python3 inquiry_agent.py
 # Copy the printed address → paste into config.py as INQUIRY_AGENT_ADDRESS
+
+# Terminal 4
+python3 eligibility_agent.py
+# Copy the printed address → paste into config.py as ELIGIBILITY_AGENT_ADDRESS
 ```
 
 ### Step 2 — Fill in config.py
 
 ```python
-PROFILE_AGENT_ADDRESS   = "agent1q..."   # from profile_agent.py output
-DISCOVERY_AGENT_ADDRESS = "agent1q..."   # from discovery_agent.py output
-INQUIRY_AGENT_ADDRESS   = "agent1q..."   # from inquiry_agent.py output
+PROFILE_AGENT_ADDRESS     = "agent1q..."   # from profile_agent.py output
+DISCOVERY_AGENT_ADDRESS   = "agent1q..."   # from discovery_agent.py output
+INQUIRY_AGENT_ADDRESS     = "agent1q..."   # from inquiry_agent.py output
+ELIGIBILITY_AGENT_ADDRESS = "agent1q..."   # from eligibility_agent.py output
 ```
 
-### Step 3 — Start the orchestrator
+### Step 3 — Create mailboxes on Agentverse
+
+For each agent, open the inspector URL printed in the terminal and click **Connect** to create a mailbox. This enables communication via ASI:One.
+
+### Step 4 — Start the orchestrator
 
 ```bash
-# Terminal 4
-python orchestrator.py
+# Terminal 5
+python3 orchestrator.py
 ```
 
-### Step 4 — Chat on ASI:One
+### Step 5 — Chat on ASI:One
 
 Go to [asi1.ai](https://asi1.ai) → New Chat → type `@trialfinder` in the To: field → send your message.
 
@@ -141,41 +155,105 @@ Go to [asi1.ai](https://asi1.ai) → New Chat → type `@trialfinder` in the To:
 
 ## Example Conversations
 
-**Finding trials:**
+**Finding trials (with vague condition clarification):**
 ```
-You:          "I have Parkinson's disease, age 65, San Francisco CA"
-TrialFinder:  "Searching ClinicalTrials.gov for Parkinson's trials near San Francisco..."
-              [Returns ranked list of trials with distance, phase, contact info]
+You:          "48 cancer sunnyvale ca"
+TrialFinder:  "Cancer is quite broad — what type of cancer?
+               (e.g. breast, lung, colorectal, leukemia, lymphoma)
+               Or say 'search anyway' to see all results."
+You:          "breast cancer"
+TrialFinder:  [Profile card shown, then searches breast cancer trials near Sunnyvale]
 ```
 
-**Requesting more results:**
+**Rich profile — better results:**
+```
+You:          "Type 2 Diabetes, 57, female, Dallas TX, on metformin, HbA1c 9.2, also have hypertension"
+TrialFinder:  [Profile card confirms all fields]
+              [Searches with sex filter=FEMALE, stage + comorbidity as extra search terms]
+              [Returns ranked trials, then screens top 5 for eligibility]
+```
+
+**Eligibility screening (automatic after search):**
+```
+TrialFinder:  "🎯 Eligibility Screening Results (Top 5 Trials):
+               🟢 Trial #1 — 88% match — Likely eligible
+                  ✅ Age fits · HbA1c 9.2 fits · Metformin use fits
+                  ❓ BMI not provided · eGFR unknown
+
+               🟡 Trial #2 — 62% match — Possibly eligible
+                  ✅ Age fits
+                  ❌ Prior insulin use may disqualify
+                  ❓ Cardiovascular history unknown"
+```
+
+**On-demand eligibility check:**
+```
+You:          "am I eligible for trial 7"
+TrialFinder:  [Screens trial #7 specifically and returns score + breakdown]
+```
+
+**Conversational filters:**
+```
+You:          "phase 3 only"         → filters current results by phase instantly
+You:          "within 100 miles"     → filters by distance
+You:          "remote only"          → shows virtual/telehealth trials only
+You:          "clear filters"        → removes all filters
+```
+
+**More results + email:**
 ```
 You:          "show more"
-TrialFinder:  [Shows trials 21-40 instantly from memory]
-```
+TrialFinder:  [Shows trials 21–40 from memory, no new search]
 
-**Drafting an inquiry email:**
-```
 You:          "email for trial 3"
 TrialFinder:  [Drafts personalised email + Gmail link pre-filled with To, Subject, Body]
+```
+
+**Profile commands:**
+```
+You:          "my profile"           → shows everything stored about you
+You:          "I also have obesity"  → adds comorbidity, shows updated profile card
+You:          "search again"         → re-runs search with updated profile
 ```
 
 ---
 
 ## Features
 
-- **Natural language understanding** — say it however you want
-- **Live ClinicalTrials.gov data** — searches in real time, no stale database
-- **Age filtering** — only shows trials you're eligible for
-- **Distance sorting** — nearest trials first, with exact mileage
-- **Progressive geo search** — 100mi → 400mi → 1000mi → nationwide
+### Profile & Understanding
+- **Natural language** — say it however you want, profile agent extracts structure
+- **Rich medical profile** — condition, age, location, medications, comorbidities, disease stage, prior treatments, gender
+- **Vague condition clarification** — asks once if condition is too broad, then searches regardless
+- **Smart profile updates** — detects condition/age changes and asks before re-searching (no silent resets)
+- **Session memory** — remembers profile across messages, persists across restarts
+- **Profile card** — shown before every search so patient can verify what's being used
+
+### Search & Matching
+- **Live ClinicalTrials.gov data** — real-time API, no stale database
+- **Sex filter** — `filter.sex=FEMALE/MALE` passed directly to ClinicalTrials.gov API
+- **Age filtering** — only shows trials within eligible age range
+- **Stage + prior treatment matching** — added to `query.term` to surface relevant trials
 - **Condition synonyms** — "Type 2 Diabetes" also searches "T2DM", "Type 2 Diabetes Mellitus"
-- **Zone summary** — see how many trials are nearby vs national vs international
+- **Progressive geo search** — 100mi → 400mi → 1000mi → nationwide
+- **Distance sorting** — nearest trials first, with exact mileage
+
+### Eligibility Screening
+- **Automatic screening** — top 5 trials screened immediately after every search
+- **On-demand** — say "am I eligible for trial 7" to screen any specific trial
+- **0–100% match score** with verdict, met criteria, failed criteria, unknowns
+- **Plain English** — no medical jargon in the output
+
+### Filters (apply without re-searching)
+- `"phase 3 only"` / `"phase 2"` — filter by trial phase
+- `"within 100 miles"` — filter by distance
+- `"remote only"` / `"virtual visits"` — filter for telehealth-friendly trials
+- `"clear filters"` — remove all filters
+
+### Communication
 - **Pagination** — top 20 shown, "show more" for next batch
-- **Email drafting** — ASI-1 writes a professional 150-word inquiry email
+- **Zone summary** — breakdown by nearby / regional / national / international
+- **Email drafting** — ASI-1 writes a professional personalised inquiry email
 - **Gmail integration** — one-click opens pre-filled Gmail compose window
-- **Session memory** — remembers your profile across messages, persists across restarts
-- **Condition switching** — detects when you ask about a new condition and resets automatically
 
 ---
 
@@ -183,13 +261,14 @@ TrialFinder:  [Drafts personalised email + Gmail link pre-filled with To, Subjec
 
 ```
 trialfinder/
-├── orchestrator.py      # Main agent — user-facing, routes to sub-agents
-├── profile_agent.py     # Extracts medical profile using ASI-1 LLM
-├── discovery_agent.py   # Searches ClinicalTrials.gov, filters, ranks
-├── inquiry_agent.py     # Drafts inquiry emails using ASI-1 LLM
-├── models.py            # Shared Pydantic message models
-├── config.py            # Sub-agent addresses (fill after first run)
-└── sessions.json        # Auto-generated session persistence
+├── orchestrator.py        # Main agent — user-facing, routes to sub-agents
+├── profile_agent.py       # Extracts full medical profile using ASI-1 LLM
+├── discovery_agent.py     # Searches ClinicalTrials.gov, filters, ranks
+├── inquiry_agent.py       # Drafts inquiry emails using ASI-1 LLM
+├── eligibility_agent.py   # Screens patient eligibility per trial using ASI-1 LLM
+├── models.py              # Shared Pydantic message models
+├── config.py              # Sub-agent addresses (fill after first run)
+└── sessions.json          # Auto-generated session persistence
 ```
 
 ---
