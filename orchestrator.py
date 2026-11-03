@@ -507,6 +507,7 @@ async def handle_user_message(ctx: Context, sender: str, msg: ChatMessage):
     await ctx.send(config.PROFILE_AGENT_ADDRESS, ProfileRequest(
         session_id=sender,
         text=text,
+        known_profile=json.dumps(session.get("profile", {})),
     ))
 
 @chat_protocol.on_message(ChatAcknowledgement)

@@ -22,6 +22,8 @@ agent = Agent(
 protocol = Protocol(name="trialfinder-internal", version="1.0.0")
 
 EXTRACT_SYSTEM = """You extract a patient's medical profile from their message to help find clinical trials.
+You will receive the patient's current known profile and their latest message.
+Extract any NEW or UPDATED information from the message and merge with the known profile.
 Return ONLY a valid JSON object with these fields:
 {
   "condition": "",        // primary condition being searched (e.g. "Type 2 Diabetes")
@@ -33,18 +35,25 @@ Return ONLY a valid JSON object with these fields:
   "prior_treatments": "", // past treatments or therapies tried (e.g. "metformin, insulin therapy")
   "gender": ""            // "male", "female", or ""
 }
-Use "" for any field not mentioned. Never guess. Age must be a number string only."""
+Rules:
+- Keep known values if not contradicted by the new message
+- Use "" ONLY for fields that are truly unknown even after combining known profile + new message
+- Never guess. Age must be a number string only.
+- If the new message refines a known field (e.g. "cancer" → "breast cancer"), use the refined value."""
 
 @protocol.on_message(ProfileRequest)
 async def handle_profile_request(ctx: Context, sender: str, msg: ProfileRequest):
     ctx.logger.info(f"Profile extraction for session {msg.session_id}: {msg.text[:80]}")
     condition = age = location = medications = comorbidities = stage = prior_treatments = gender = ""
     try:
+        user_content = msg.text
+        if msg.known_profile and msg.known_profile != "{}":
+            user_content = f"Known profile so far: {msg.known_profile}\n\nNew message: {msg.text}"
         r = client.chat.completions.create(
             model="asi1",
             messages=[
                 {"role": "system", "content": EXTRACT_SYSTEM},
-                {"role": "user",   "content": msg.text},
+                {"role": "user",   "content": user_content},
             ],
             max_tokens=250,
         )

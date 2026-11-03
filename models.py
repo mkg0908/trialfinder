@@ -2,8 +2,9 @@ from uagents import Model
 
 # ── Orchestrator → Profile Agent ──────────────────────────────────────────────
 class ProfileRequest(Model):
-    session_id: str
-    text: str
+    session_id:   str
+    text:         str
+    known_profile: str = ""   # JSON of already-known fields so agent only extracts what's missing
 
 # ── Profile Agent → Orchestrator ──────────────────────────────────────────────
 class ProfileResponse(Model):
