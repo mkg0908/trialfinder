@@ -194,6 +194,35 @@ def build_response(trials: list, profile: dict, filters: dict | None = None,
     lines.append("⚠️  Always consult your doctor before enrolling in any clinical trial.")
     return "\n".join(lines)
 
+# ── Vague condition detection ─────────────────────────────────────────────────
+VAGUE_CONDITIONS = {
+    "cancer":        "What type of cancer? (e.g. breast, lung, colorectal, leukemia, lymphoma)",
+    "tumor":         "What type of tumor? (e.g. brain tumor, solid tumor, glioblastoma)",
+    "diabetes":      "Type 1 or Type 2 diabetes? (or gestational, MODY, pre-diabetes?)",
+    "heart disease": "What type? (e.g. heart failure, coronary artery disease, atrial fibrillation)",
+    "heart failure": None,   # specific enough — no follow-up
+    "arthritis":     "Rheumatoid arthritis or osteoarthritis? (or psoriatic, ankylosing spondylitis?)",
+    "liver disease": "What type? (e.g. hepatitis B, hepatitis C, cirrhosis, NAFLD/NASH)",
+    "lung disease":  "What type? (e.g. COPD, asthma, pulmonary fibrosis, lung cancer)",
+    "kidney disease":"What type? (e.g. chronic kidney disease, IgA nephropathy, polycystic kidney)",
+    "depression":    None,   # specific enough
+    "pain":          "What condition causes the pain? (e.g. chronic back pain, fibromyalgia, neuropathy)",
+    "skin disease":  "What type? (e.g. psoriasis, eczema, melanoma, acne)",
+    "eye disease":   "What type? (e.g. macular degeneration, diabetic retinopathy, glaucoma)",
+    "autoimmune":    "Which autoimmune condition? (e.g. lupus, rheumatoid arthritis, Crohn's disease)",
+    "infection":     "Which infection? (e.g. HIV, hepatitis C, UTI, COVID-19)",
+    "mental health": "Which condition? (e.g. depression, anxiety, bipolar disorder, schizophrenia)",
+    "blood disease": "Which blood condition? (e.g. anemia, leukemia, sickle cell, thrombocytopenia)",
+}
+
+def get_vague_followup(condition: str) -> str | None:
+    """Returns a follow-up question if the condition is too broad, else None."""
+    c = condition.lower().strip()
+    for vague, question in VAGUE_CONDITIONS.items():
+        if c == vague or c == vague + "s":
+            return question   # None means it's in our list but specific enough
+    return None   # not vague — proceed
+
 # ── Filter detection ──────────────────────────────────────────────────────────
 def build_profile_card(profile: dict) -> str:
     """Renders a compact profile summary card."""
@@ -317,8 +346,30 @@ async def handle_user_message(ctx: Context, sender: str, msg: ChatMessage):
             return
         # Not yes/no — fall through to normal handling
 
-    # ── My profile? ─────────────────────────────────────────────────────────
+    # ── "Search anyway" — skip vague follow-up ──────────────────────────────
     text_lower = text.lower()
+    if any(p in text_lower for p in ("search anyway","just search","skip","show anyway","proceed")) \
+            and session.get("_asked_clarification") and session["profile"].get("condition"):
+        session["_asked_clarification"] = False
+        profile = session["profile"]
+        if profile.get("condition") and profile.get("location"):
+            session["searched"] = True
+            session["state"]    = "waiting_discovery"
+            await send_to_user(ctx, sender,
+                f"🔍 Searching for **{profile['condition']}** trials near **{profile['location']}**...")
+            await ctx.send(config.DISCOVERY_AGENT_ADDRESS, DiscoveryRequest(
+                session_id=sender,
+                condition=profile.get("condition",""),
+                age=profile.get("age",""),
+                location=profile.get("location",""),
+                comorbidities=profile.get("comorbidities",""),
+                stage=profile.get("stage",""),
+                prior_treatments=profile.get("prior_treatments",""),
+                gender=profile.get("gender",""),
+            ))
+            return
+
+    # ── My profile? ─────────────────────────────────────────────────────────
     if any(p in text_lower for p in ("my profile","show profile","what do you know","profile?")) and session["profile"]:
         await send_to_user(ctx, sender, build_profile_card(session["profile"]))
         return
@@ -521,6 +572,17 @@ async def handle_profile_response(ctx: Context, sender: str, msg: ProfileRespons
     has_enough = profile.get("condition") and profile.get("location")
 
     if has_enough and not session["searched"]:
+        # ── Check if condition is too vague — ask once ────────────────────────
+        followup = get_vague_followup(profile.get("condition",""))
+        if followup and not session.get("_asked_clarification"):
+            session["_asked_clarification"] = True
+            await send_to_user(ctx, msg.session_id,
+                f"**{profile['condition'].title()}** is quite broad — I want to find the most relevant trials for you.\n\n"
+                f"💬 {followup}\n\n"
+                "_Or say **\"search anyway\"** to see all results now._")
+            return
+
+        session["_asked_clarification"] = False
         # ── Trigger Discovery ─────────────────────────────────────────────────
         session["searched"] = True
         session["state"]    = "waiting_discovery"
