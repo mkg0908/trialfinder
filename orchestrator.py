@@ -572,17 +572,20 @@ async def handle_profile_response(ctx: Context, sender: str, msg: ProfileRespons
 
     has_enough = profile.get("condition") and profile.get("location")
 
-    if has_enough and not session["searched"]:
-        # ── Check if condition is too vague — ask once ────────────────────────
+    # ── Check if condition is too vague — ask once regardless of searched state ─
+    if has_enough:
         followup = get_vague_followup(profile.get("condition",""))
         if followup and not session.get("_asked_clarification"):
             session["_asked_clarification"] = True
+            session["searched"] = False   # reset so we search fresh after clarification
+            session["last_trials"] = []
             await send_to_user(ctx, msg.session_id,
                 f"**{profile['condition'].title()}** is quite broad — I want to find the most relevant trials for you.\n\n"
                 f"💬 {followup}\n\n"
                 "_Or say **\"search anyway\"** to see all results now._")
             return
 
+    if has_enough and not session["searched"]:
         session["_asked_clarification"] = False
         # ── Trigger Discovery ─────────────────────────────────────────────────
         session["searched"] = True
