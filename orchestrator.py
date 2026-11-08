@@ -541,9 +541,11 @@ async def handle_profile_response(ctx: Context, sender: str, msg: ProfileRespons
     new_loc  = msg.location.strip()
 
     # ── Detect condition change → ask user instead of auto-resetting ──────────
+    # Skip if we just asked for clarification (user is refining, not changing)
     has_existing = bool(profile.get("condition")) and session["searched"]
 
-    if has_existing and new_cond and new_cond.lower() != profile.get("condition","").lower():
+    if has_existing and new_cond and new_cond.lower() != profile.get("condition","").lower() \
+            and not session.get("_asked_clarification"):
         # Store the pending change and ask for confirmation
         session["_pending_profile_change"] = {
             "condition": new_cond,
