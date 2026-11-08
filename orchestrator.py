@@ -1,15 +1,21 @@
 """
 Orchestrator Agent — the only agent users interact with via ASI:One.
-Routes requests to Profile, Discovery, and Inquiry sub-agents.
+Routes requests to Profile, Discovery, Eligibility, and Inquiry sub-agents.
+Includes Payment Protocol (Stripe) for eligibility screening.
 """
-import json, re
-from datetime import datetime
+import json, re, time
+from datetime import datetime, timezone
 from uuid import uuid4
 from urllib.parse import quote
 
+import stripe
 from uagents import Agent, Context, Protocol
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement, ChatMessage, TextContent, chat_protocol_spec,
+)
+from uagents_core.contrib.protocols.payment import (
+    CommitPayment, CompletePayment, RejectPayment,
+    Funds, RequestPayment, payment_protocol_spec,
 )
 
 from models import (
@@ -19,6 +25,15 @@ from models import (
     InquiryRequest, InquiryResponse,
 )
 import config
+
+# ── Stripe Config ────────────────────────────────────────────────────────────
+import os
+STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_CURRENCY        = "usd"
+STRIPE_AMOUNT_CENTS    = 99  # $0.99 per eligibility screening
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 agent = Agent(
@@ -31,6 +46,7 @@ agent = Agent(
 
 chat_protocol     = Protocol(spec=chat_protocol_spec)
 internal_protocol = Protocol(name="trialfinder-internal", version="1.0.0")
+payment_protocol  = Protocol(spec=payment_protocol_spec, role="seller")
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
 SESSIONS_FILE = "sessions.json"
@@ -654,20 +670,40 @@ async def handle_discovery_response(ctx: Context, sender: str, msg: DiscoveryRes
     reply = build_response(trials, session["profile"])
     await send_to_user(ctx, msg.session_id, reply)
 
-    # ── Kick off eligibility screening for top 5 trials ───────────────────────
+    # ── Offer eligibility screening (paid via Stripe) ──────────────────────────
     if trials and config.ELIGIBILITY_AGENT_ADDRESS:
-        top5 = [
-            {"nct_id": t["nct_id"], "title": t["title"],
-             "eligibility_criteria": t.get("eligibility_criteria","")}
-            for t in trials[:5]
-        ]
-        await send_to_user(ctx, msg.session_id,
-            "🔎 Screening your eligibility for the top 5 trials...")
-        await ctx.send(config.ELIGIBILITY_AGENT_ADDRESS, EligibilityRequest(
-            session_id=msg.session_id,
-            trials_json=json.dumps(top5),
-            profile_json=json.dumps(session["profile"]),
-        ))
+        try:
+            checkout = create_eligibility_checkout(msg.session_id, msg.session_id)
+            payment_req = RequestPayment(
+                accepted_funds=[
+                    Funds(currency="USD", amount="0.99", payment_method="stripe")
+                ],
+                recipient=str(agent.address),
+                deadline_seconds=1800,
+                reference=f"eligibility-{msg.session_id[:16]}",
+                description="Eligibility Screening — AI scores your match against the top 5 trials (0-100%) with plain English breakdown of what you meet, fail, and what's unknown.",
+                metadata={"stripe": checkout},
+            )
+            await send_to_user(ctx, msg.session_id,
+                "🎯 **Want to know if you qualify?**\n"
+                "For $0.99, our AI Eligibility Screener will read each trial's criteria and score your match 0-100%.\n"
+                "Complete the payment below to unlock screening.")
+            await ctx.send(msg.session_id, payment_req)
+        except Exception as e:
+            ctx.logger.exception("Stripe checkout failed — running eligibility for free")
+            # Fallback: run eligibility for free if Stripe fails
+            top5 = [
+                {"nct_id": t["nct_id"], "title": t["title"],
+                 "eligibility_criteria": t.get("eligibility_criteria","")}
+                for t in trials[:5]
+            ]
+            await send_to_user(ctx, msg.session_id,
+                "🔎 Screening your eligibility for the top 5 trials...")
+            await ctx.send(config.ELIGIBILITY_AGENT_ADDRESS, EligibilityRequest(
+                session_id=msg.session_id,
+                trials_json=json.dumps(top5),
+                profile_json=json.dumps(session["profile"]),
+            ))
 
 def score_emoji(score: int) -> str:
     if score >= 80: return "🟢"
@@ -742,8 +778,93 @@ async def handle_inquiry_response(ctx: Context, sender: str, msg: InquiryRespons
     )
     await send_to_user(ctx, msg.session_id, reply)
 
+# ── Payment Protocol: Stripe for eligibility screening ───────────────────────
+def create_eligibility_checkout(user_address: str, session_id: str) -> dict:
+    """Create a Stripe Checkout Session for eligibility screening."""
+    expires_at = int(time.time()) + 1800  # 30 min
+    session = stripe.checkout.Session.create(
+        ui_mode="embedded",
+        redirect_on_completion="if_required",
+        payment_method_types=["card"],
+        mode="payment",
+        return_url=f"https://asi1.ai?session_id={{CHECKOUT_SESSION_ID}}",
+        expires_at=expires_at,
+        line_items=[{
+            "price_data": {
+                "currency": STRIPE_CURRENCY,
+                "product_data": {
+                    "name": "TrialFinder Eligibility Screening",
+                    "description": "AI screens your match against the top 5 clinical trials — 0-100% score with plain English breakdown",
+                },
+                "unit_amount": STRIPE_AMOUNT_CENTS,
+            },
+            "quantity": 1,
+        }],
+        metadata={"user_address": user_address, "session_id": session_id},
+    )
+    return {
+        "client_secret": str(session.client_secret or ""),
+        "id": str(session.id),
+        "checkout_session_id": str(session.id),
+        "publishable_key": STRIPE_PUBLISHABLE_KEY,
+        "currency": STRIPE_CURRENCY,
+        "amount_cents": str(STRIPE_AMOUNT_CENTS),
+        "ui_mode": "embedded",
+    }
+
+
+@payment_protocol.on_message(CommitPayment)
+async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
+    """User completed Stripe checkout — verify and run eligibility screening."""
+    if msg.funds.payment_method != "stripe" or not msg.transaction_id:
+        await ctx.send(sender, RejectPayment(reason="Unsupported payment method."))
+        return
+
+    # Verify with Stripe
+    try:
+        checkout = stripe.checkout.Session.retrieve(msg.transaction_id)
+        if checkout.payment_status != "paid":
+            await ctx.send(sender, RejectPayment(reason="Payment not completed. Please finish checkout."))
+            return
+    except Exception as e:
+        await ctx.send(sender, RejectPayment(reason=f"Payment verification failed: {e}"))
+        return
+
+    # Payment verified
+    await ctx.send(sender, CompletePayment(transaction_id=msg.transaction_id))
+
+    ctx.logger.info(f"Payment verified for {sender} — running eligibility screening")
+
+    # Find the session and run eligibility
+    session = get_session(sender)
+    trials = session.get("last_trials", [])
+    if not trials:
+        await send_to_user(ctx, sender, "Payment received! But no trials found yet. Search for trials first, then screening will run automatically.")
+        return
+
+    # Run eligibility screening
+    top5 = [
+        {"nct_id": t["nct_id"], "title": t["title"],
+         "eligibility_criteria": t.get("eligibility_criteria", "")}
+        for t in trials[:5]
+    ]
+    await send_to_user(ctx, sender,
+        "✅ Payment received! Screening your eligibility for the top 5 trials...")
+    await ctx.send(config.ELIGIBILITY_AGENT_ADDRESS, EligibilityRequest(
+        session_id=sender,
+        trials_json=json.dumps(top5),
+        profile_json=json.dumps(session["profile"]),
+    ))
+
+
+@payment_protocol.on_message(RejectPayment)
+async def handle_reject_payment(ctx: Context, sender: str, msg: RejectPayment):
+    await send_to_user(ctx, sender, f"Payment cancelled. {msg.reason or ''}\nYou can still browse trials for free.")
+
+
 agent.include(chat_protocol, publish_manifest=True)
 agent.include(internal_protocol)
+agent.include(payment_protocol, publish_manifest=True)
 
 if __name__ == "__main__":
     print(f"\n✅ Orchestrator address: {agent.address}\n")
