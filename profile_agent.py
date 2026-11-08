@@ -49,17 +49,29 @@ async def handle_profile_request(ctx: Context, sender: str, msg: ProfileRequest)
         user_content = msg.text
         if msg.known_profile and msg.known_profile != "{}":
             user_content = f"Known profile so far: {msg.known_profile}\n\nNew message: {msg.text}"
-        r = client.chat.completions.create(
-            model="asi1",
-            messages=[
-                {"role": "system", "content": EXTRACT_SYSTEM},
-                {"role": "user",   "content": user_content},
-            ],
-            max_tokens=250,
-        )
-        raw   = str(r.choices[0].message.content)
-        start = raw.find("{"); end = raw.rfind("}") + 1
-        data  = json.loads(raw[start:end])
+
+        data = None
+        for attempt_tokens in (500, 1000):
+            r = client.chat.completions.create(
+                model="asi1",
+                messages=[
+                    {"role": "system", "content": EXTRACT_SYSTEM},
+                    {"role": "user",   "content": user_content},
+                ],
+                max_tokens=attempt_tokens,
+            )
+            raw   = str(r.choices[0].message.content)
+            start = raw.find("{"); end = raw.rfind("}") + 1
+            if start == -1 or end <= start:
+                continue
+            try:
+                data = json.loads(raw[start:end])
+                break
+            except json.JSONDecodeError:
+                continue
+
+        if not data:
+            raise ValueError(f"Could not parse JSON from LLM response: {raw[:200]}")
         condition        = data.get("condition",        "").strip()
         age              = data.get("age",              "").strip()
         location         = data.get("location",         "").strip()
