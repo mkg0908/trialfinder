@@ -211,8 +211,10 @@ def search_all(condition, user_age, user_coords, gender="", comorbidities="", st
                 "pageSize":            50,
                 "format":              "json",
             }
-            if geo_filter:   params["filter.geo"] = geo_filter
-            if sex_filter:   params["filter.sex"] = sex_filter
+            # geo filter disabled — ClinicalTrials.gov API returns 400 with filter.geo
+            # if geo_filter:   params["filter.geo"] = geo_filter
+            # sex filter disabled — ClinicalTrials.gov API returns 400 with filter.sex
+            # if sex_filter:   params["filter.sex"] = sex_filter
             if extra_terms:  params["query.term"]  = " ".join(extra_terms[:3])
             try:
                 r = httpx.get(CTGOV, params=params, timeout=20)
@@ -225,8 +227,7 @@ def search_all(condition, user_age, user_coords, gender="", comorbidities="", st
                         if age_ok(parsed, user_age):
                             results.append(parsed)
             except Exception: pass
-        us_eligible = [t for t in results if t["has_us"]]
-        if geo_filter and len(us_eligible) >= 10: break
+        if len(results) >= 10: break
 
     results.sort(key=lambda t: t["distance_mi"] if t["distance_mi"] is not None else 999999)
     return results
