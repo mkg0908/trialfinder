@@ -787,7 +787,7 @@ def create_eligibility_checkout(user_address: str, session_id: str) -> dict:
     session = stripe.checkout.Session.create(
         ui_mode="embedded",
         redirect_on_completion="if_required",
-        payment_method_types=["card"],
+        # payment methods managed via Stripe Dashboard
         mode="payment",
         return_url=f"https://asi1.ai?session_id={{CHECKOUT_SESSION_ID}}",
         expires_at=expires_at,
